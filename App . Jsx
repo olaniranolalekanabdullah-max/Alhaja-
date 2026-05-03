@@ -1,0 +1,518 @@
+import { useState, useEffect } from "react";
+
+// ============================================================
+// CONSTANTS & UTILITIES
+// ============================================================
+const C = {
+  bg: '#08101E', surface: '#0F1D2E', card: '#152030', border: '#1E2F45',
+  accent: '#F59E0B', accentDark: '#D97706', accentLight: '#FDE68A',
+  text: '#EEF2F7', muted: '#6B809A', mutedLight: '#8FA3BA',
+  success: '#10B981', danger: '#F43F5E', info: '#38BDF8', warning: '#FB923C',
+};
+
+const CATS = ['Food & Drinks', 'Clothing', 'Electronics', 'Beauty', 'Household', 'Stationery', 'Other'];
+const genId = () => Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+const fmt = (n) => `$${parseFloat(n || 0).toFixed(2)}`;
+const fmtDate = (ts) => new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+const fmtDateTime = (ts) => new Date(ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+// Storage helpers with fallback to memory
+const memStore = {};
+const db = {
+  async get(key) {
+    try { const r = await window.storage.get(key); return r ? JSON.parse(r.value) : null; }
+    catch { return memStore[key] ?? null; }
+  },
+  async set(key, val) {
+    try { await window.storage.set(key, JSON.stringify(val)); }
+    catch { memStore[key] = val; }
+  },
+};
+
+// ============================================================
+// STYLES
+// ============================================================
+const S = {
+  app: {
+    width: '100%', maxWidth: 480, height: '100vh', margin: '0 auto',
+    background: C.bg, color: C.text, display: 'flex', flexDirection: 'column',
+    overflow: 'hidden', position: 'relative',
+    fontFamily: "'Nunito', 'Segoe UI', system-ui, sans-serif",
+  },
+  screen: { flex: 1, overflowY: 'auto', paddingBottom: 80 },
+  header: {
+    padding: '14px 16px', background: C.surface, borderBottom: `1px solid ${C.border}`,
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    position: 'sticky', top: 0, zIndex: 20,
+  },
+  card: {
+    background: C.card, border: `1px solid ${C.border}`,
+    borderRadius: 16, padding: 16, marginBottom: 10,
+  },
+  row: { display: 'flex', alignItems: 'center', gap: 8 },
+  col: { display: 'flex', flexDirection: 'column', gap: 4 },
+  input: {
+    width: '100%', padding: '13px 14px', background: C.surface,
+    border: `1px solid ${C.border}`, borderRadius: 12, color: C.text,
+    fontSize: 15, boxSizing: 'border-box', outline: 'none', fontFamily: 'inherit',
+  },
+  label: { fontSize: 12, color: C.muted, fontWeight: 700, marginBottom: 5, letterSpacing: 0.5 },
+  btn: {
+    padding: '13px 20px', borderRadius: 12, border: 'none', fontWeight: 800,
+    fontSize: 15, cursor: 'pointer', display: 'flex', alignItems: 'center',
+    justifyContent: 'center', gap: 6, transition: 'opacity 0.15s', fontFamily: 'inherit',
+  },
+  badge: { padding: '3px 10px', borderRadius: 20, fontSize: 12, fontWeight: 700, display: 'inline-block' },
+  modal: {
+    position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.75)',
+    zIndex: 100, display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+  },
+  sheet: {
+    background: C.surface, borderRadius: '24px 24px 0 0',
+    width: '100%', maxWidth: 480, maxHeight: '92vh', overflowY: 'auto', padding: 20,
+  },
+  statCard: {
+    flex: 1, background: C.card, border: `1px solid ${C.border}`,
+    borderRadius: 14, padding: '14px 10px', textAlign: 'center',
+  },
+};
+
+// ============================================================
+// REUSABLE PRIMITIVES
+// ============================================================
+const Field = ({ label, ...p }) => (
+  <div style={{ marginBottom: 14 }}>
+    {label && <div style={S.label}>{label}</div>}
+    <input style={S.input} {...p} />
+  </div>
+);
+
+const Picker = ({ label, options, ...p }) => (
+  <div style={{ marginBottom: 14 }}>
+    {label && <div style={S.label}>{label}</div>}
+    <select style={{ ...S.input, appearance: 'auto' }} {...p}>
+      {options.map(o => (
+        <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>
+      ))}
+    </select>
+  </div>
+);
+
+const Btn = ({ variant = 'primary', full, style: xs, children, ...p }) => {
+  const v = {
+    primary: { background: C.accent, color: '#000' },
+    danger: { background: C.danger, color: '#fff' },
+    ghost: { background: C.border, color: C.text },
+    success: { background: C.success, color: '#fff' },
+    outline: { background: 'transparent', color: C.accent, border: `2px solid ${C.accent}` },
+  }[variant] || {};
+  return (
+    <button style={{ ...S.btn, ...v, ...(full && { width: '100%' }), ...xs }} {...p}>
+      {children}
+    </button>
+  );
+};
+
+const Bar = ({ title, right, onBack }) => (
+  <div style={S.header}>
+    <div style={{ ...S.row }}>
+      {onBack && (
+        <button onClick={onBack} style={{ background: 'none', border: 'none', color: C.accent, fontSize: 22, cursor: 'pointer', marginRight: 4, padding: 0 }}>
+          ‹
+        </button>
+      )}
+      <span style={{ fontSize: 20, fontWeight: 900, letterSpacing: -0.5 }}>{title}</span>
+    </div>
+    {right}
+  </div>
+);
+
+const Empty = ({ icon, msg }) => (
+  <div style={{ textAlign: 'center', padding: '56px 24px', color: C.muted }}>
+    <div style={{ fontSize: 52, marginBottom: 14 }}>{icon}</div>
+    <div style={{ fontSize: 15, lineHeight: 1.5 }}>{msg}</div>
+  </div>
+);
+
+const Alert = ({ children, color = C.warning }) => (
+  <div style={{ background: color + '18', border: `1px solid ${color}50`, borderRadius: 12, padding: '12px 14px', marginBottom: 10 }}>
+    {children}
+  </div>
+);
+
+// ============================================================
+// MAIN APP
+// ============================================================
+export default function App() {
+  const [loading, setLoading] = useState(true);
+  const [screen, setScreen] = useState('auth');  // auth | main
+  const [authMode, setAuthMode] = useState('login');
+  const [authForm, setAuthForm] = useState({ name: '', email: '', password: '', confirm: '' });
+  const [authErr, setAuthErr] = useState('');
+
+  const [user, setUser] = useState(null);
+  const [tab, setTab] = useState('dashboard');
+  const [modal, setModal] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [receipt, setReceipt] = useState(null);
+
+  const [products, setProducts] = useState([]);
+  const [sales, setSales] = useState([]);
+  const [customers, setCustomers] = useState([]);
+
+  // POS
+  const [cart, setCart] = useState([]);
+  const [posQ, setPosQ] = useState('');
+  const [custSel, setCustSel] = useState('');
+
+  useEffect(() => {
+    (async () => {
+      const [u, p, s, c] = await Promise.all([
+        db.get('session'), db.get('products'), db.get('sales'), db.get('customers'),
+      ]);
+      if (p) setProducts(p);
+      if (s) setSales(s);
+      if (c) setCustomers(c);
+      if (u) { setUser(u); setScreen('main'); }
+      setLoading(false);
+    })();
+  }, []);
+
+  const saveProducts = async (p) => { setProducts(p); await db.set('products', p); };
+  const saveSales = async (s) => { setSales(s); await db.set('sales', s); };
+  const saveCustomers = async (c) => { setCustomers(c); await db.set('customers', c); };
+
+  // AUTH
+  const login = async () => {
+    setAuthErr('');
+    const users = await db.get('users') || [];
+    const u = users.find(x => x.email === authForm.email && x.password === authForm.password);
+    if (!u) { setAuthErr('Invalid email or password'); return; }
+    setUser(u); await db.set('session', u); setScreen('main');
+  };
+
+  const register = async () => {
+    setAuthErr('');
+    if (!authForm.name || !authForm.email || !authForm.password) { setAuthErr('All fields are required'); return; }
+    if (authForm.password !== authForm.confirm) { setAuthErr('Passwords do not match'); return; }
+    if (authForm.password.length < 6) { setAuthErr('Password must be at least 6 characters'); return; }
+    const users = await db.get('users') || [];
+    if (users.find(x => x.email === authForm.email)) { setAuthErr('Email already registered'); return; }
+    const u = { id: genId(), name: authForm.name, email: authForm.email, password: authForm.password, role: 'admin', createdAt: Date.now() };
+    await db.set('users', [...users, u]);
+    setUser(u); await db.set('session', u); setScreen('main');
+  };
+
+  const logout = async () => {
+    await db.set('session', null);
+    setUser(null); setScreen('auth'); setCart([]); setAuthForm({ name: '', email: '', password: '', confirm: '' });
+  };
+
+  // PRODUCTS
+  const addProduct = async (p) => await saveProducts([...products, { ...p, id: genId(), createdAt: Date.now() }]);
+  const editProduct = async (p) => await saveProducts(products.map(x => x.id === p.id ? p : x));
+  const delProduct = async (id) => await saveProducts(products.filter(x => x.id !== id));
+
+  // CART
+  const cartTotal = cart.reduce((s, i) => s + i.price * i.qty, 0);
+  const cartProfit = cart.reduce((s, i) => s + (i.price - i.cost) * i.qty, 0);
+
+  const addToCart = (p) => {
+    const ex = cart.find(i => i.pid === p.id);
+    if (ex) {
+      if (ex.qty >= p.qty) return;
+      setCart(cart.map(i => i.pid === p.id ? { ...i, qty: i.qty + 1 } : i));
+    } else {
+      if (p.qty < 1) return;
+      setCart([...cart, { pid: p.id, name: p.name, price: p.sellingPrice, cost: p.costPrice, qty: 1 }]);
+    }
+  };
+  const removeFromCart = (pid) => setCart(cart.filter(i => i.pid !== pid));
+  const setQty = (pid, qty) => {
+    if (qty <= 0) { removeFromCart(pid); return; }
+    const p = products.find(x => x.id === pid);
+    if (qty > p.qty) return;
+    setCart(cart.map(i => i.pid === pid ? { ...i, qty } : i));
+  };
+
+  const completeSale = async () => {
+    if (!cart.length) return;
+    const sale = {
+      id: genId(), items: cart, total: cartTotal, profit: cartProfit,
+      customerId: custSel || null,
+      customerName: custSel ? customers.find(c => c.id === custSel)?.name : 'Walk-in',
+      date: Date.now(),
+    };
+    const updated = products.map(p => {
+      const ci = cart.find(i => i.pid === p.id);
+      return ci ? { ...p, qty: p.qty - ci.qty } : p;
+    });
+    await saveProducts(updated);
+    await saveSales([...sales, sale]);
+    setCart([]); setCustSel(''); setReceipt(sale); setModal('receipt');
+  };
+
+  // CUSTOMERS
+  const addCustomer = async (c) => await saveCustomers([...customers, { ...c, id: genId(), createdAt: Date.now() }]);
+  const delCustomer = async (id) => await saveCustomers(customers.filter(x => x.id !== id));
+
+  // DASHBOARD STATS
+  const now = Date.now();
+  const dayMs = 86400000;
+  const todaySales = sales.filter(s => s.date >= new Date().setHours(0, 0, 0, 0));
+  const weekSales = sales.filter(s => s.date >= now - 7 * dayMs);
+  const monthSales = sales.filter(s => {
+    const d = new Date(); d.setDate(1); d.setHours(0, 0, 0, 0);
+    return s.date >= d.getTime();
+  });
+  const lowStock = products.filter(p => p.qty > 0 && p.qty <= 5);
+  const outStock = products.filter(p => p.qty === 0);
+
+  // ── LOADING ──
+  if (loading) {
+    return (
+      <div style={{ ...S.app, justifyContent: 'center', alignItems: 'center' }}>
+        <div style={{ fontSize: 52 }}>🛍️</div>
+        <div style={{ fontSize: 22, fontWeight: 900, color: C.accent, marginTop: 12 }}>ShopMate</div>
+        <div style={{ color: C.muted, marginTop: 8 }}>Loading your store…</div>
+      </div>
+    );
+  }
+
+  // ── AUTH SCREEN ──
+  if (screen === 'auth') {
+    const isLogin = authMode === 'login';
+    return (
+      <div style={{ ...S.app, justifyContent: 'center', alignItems: 'center', padding: 24, boxSizing: 'border-box' }}>
+        <div style={{ textAlign: 'center', marginBottom: 32 }}>
+          <div style={{ fontSize: 56 }}>🛍️</div>
+          <div style={{ fontSize: 30, fontWeight: 900, color: C.accent, letterSpacing: -1 }}>ShopMate</div>
+          <div style={{ color: C.muted, fontSize: 14, marginTop: 4 }}>Your pocket business manager</div>
+        </div>
+        <div style={{ width: '100%', maxWidth: 360 }}>
+          <div style={{ display: 'flex', background: C.surface, borderRadius: 14, padding: 4, marginBottom: 24, border: `1px solid ${C.border}` }}>
+            {[['login', '🔑 Login'], ['register', '✨ Register']].map(([m, lbl]) => (
+              <button key={m} onClick={() => { setAuthMode(m); setAuthErr(''); }}
+                style={{ flex: 1, padding: '11px', borderRadius: 11, border: 'none', fontWeight: 800, fontSize: 14, cursor: 'pointer', fontFamily: 'inherit',
+                  background: authMode === m ? C.accent : 'transparent', color: authMode === m ? '#000' : C.muted }}>
+                {lbl}
+              </button>
+            ))}
+          </div>
+
+          {!isLogin && <Field label="FULL NAME" placeholder="Jane Smith" value={authForm.name} onChange={e => setAuthForm({ ...authForm, name: e.target.value })} />}
+          <Field label="EMAIL" type="email" placeholder="you@example.com" value={authForm.email} onChange={e => setAuthForm({ ...authForm, email: e.target.value })} />
+          <Field label="PASSWORD" type="password" placeholder="••••••••" value={authForm.password} onChange={e => setAuthForm({ ...authForm, password: e.target.value })} />
+          {!isLogin && <Field label="CONFIRM PASSWORD" type="password" placeholder="••••••••" value={authForm.confirm} onChange={e => setAuthForm({ ...authForm, confirm: e.target.value })} />}
+
+          {authErr && (
+            <div style={{ color: C.danger, fontSize: 13, marginBottom: 14, padding: '10px 14px', background: C.danger + '18', borderRadius: 10 }}>
+              ⚠️ {authErr}
+            </div>
+          )}
+          <Btn full onClick={isLogin ? login : register} style={{ marginTop: 4, fontSize: 16 }}>
+            {isLogin ? '→ Login to My Store' : '→ Create My Store'}
+          </Btn>
+          {isLogin && (
+            <div style={{ textAlign: 'center', marginTop: 16, color: C.muted, fontSize: 13 }}>
+              New here?{' '}
+              <span style={{ color: C.accent, cursor: 'pointer', fontWeight: 700 }} onClick={() => setAuthMode('register')}>
+                Create an account
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // ── MAIN APP ──
+  return (
+    <div style={S.app}>
+      <div style={S.screen}>
+
+        {/* ─ DASHBOARD ─ */}
+        {tab === 'dashboard' && (
+          <>
+            <div style={{ ...S.header, flexDirection: 'column', alignItems: 'flex-start', gap: 2 }}>
+              <div style={{ ...S.row, width: '100%', justifyContent: 'space-between' }}>
+                <div>
+                  <div style={{ fontSize: 13, color: C.muted, fontWeight: 600 }}>Welcome back 👋</div>
+                  <div style={{ fontSize: 22, fontWeight: 900 }}>{user?.name}</div>
+                </div>
+                <button onClick={logout} style={{ background: C.border, border: 'none', borderRadius: 10, padding: '7px 12px', color: C.muted, fontWeight: 700, cursor: 'pointer', fontSize: 13 }}>
+                  Logout
+                </button>
+              </div>
+            </div>
+            <div style={{ padding: 16 }}>
+              {/* Hero */}
+              <div style={{ background: `linear-gradient(135deg, ${C.accent} 0%, ${C.accentDark} 100%)`, borderRadius: 20, padding: '22px 20px', marginBottom: 14 }}>
+                <div style={{ fontSize: 12, fontWeight: 800, opacity: 0.65, letterSpacing: 1 }}>TODAY'S REVENUE</div>
+                <div style={{ fontSize: 40, fontWeight: 900, color: '#000', lineHeight: 1.1 }}>
+                  {fmt(todaySales.reduce((s, x) => s + x.total, 0))}
+                </div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: '#00000088', marginTop: 4 }}>
+                  Profit: {fmt(todaySales.reduce((s, x) => s + x.profit, 0))} · {todaySales.length} sale{todaySales.length !== 1 ? 's' : ''}
+                </div>
+              </div>
+
+              {/* Stats */}
+              <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+                {[
+                  { lbl: 'WEEK', val: weekSales.reduce((s, x) => s + x.total, 0), color: C.info },
+                  { lbl: 'MONTH', val: monthSales.reduce((s, x) => s + x.total, 0), color: C.success },
+                  { lbl: 'PROFIT', val: monthSales.reduce((s, x) => s + x.profit, 0), color: C.accent },
+                ].map(({ lbl, val, color }) => (
+                  <div key={lbl} style={S.statCard}>
+                    <div style={{ color: C.muted, fontSize: 10, fontWeight: 800, letterSpacing: 0.5 }}>{lbl}</div>
+                    <div style={{ fontSize: 16, fontWeight: 900, color, marginTop: 4 }}>{fmt(val)}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Alerts */}
+              {outStock.length > 0 && (
+                <Alert color={C.danger}>
+                  <div style={{ fontWeight: 800, color: C.danger, marginBottom: 6 }}>🔴 Out of Stock</div>
+                  {outStock.map(p => <div key={p.id} style={{ fontSize: 13, color: C.danger }}>{p.name}</div>)}
+                </Alert>
+              )}
+              {lowStock.length > 0 && (
+                <Alert color={C.warning}>
+                  <div style={{ fontWeight: 800, color: C.warning, marginBottom: 6 }}>⚠️ Low Stock Alert</div>
+                  {lowStock.map(p => <div key={p.id} style={{ fontSize: 13, color: C.warning }}>{p.name} — {p.qty} left</div>)}
+                </Alert>
+              )}
+
+              {/* Quick actions */}
+              <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 12, color: C.mutedLight }}>QUICK ACTIONS</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 20 }}>
+                {[
+                  { icon: '🛒', lbl: 'New Sale', t: 'pos', color: C.accent },
+                  { icon: '📦', lbl: 'Products', t: 'products', color: C.info },
+                  { icon: '📋', lbl: 'Sales History', t: 'sales', color: C.success },
+                  { icon: '👥', lbl: 'Customers', t: 'customers', color: C.warning },
+                ].map(({ icon, lbl, t, color }) => (
+                  <button key={t} onClick={() => setTab(t)} style={{
+                    background: C.card, border: `1px solid ${C.border}`, borderRadius: 16,
+                    padding: '18px 16px', cursor: 'pointer', textAlign: 'left', color: C.text,
+                  }}>
+                    <div style={{ fontSize: 30 }}>{icon}</div>
+                    <div style={{ fontSize: 14, fontWeight: 800, marginTop: 10, color }}>{lbl}</div>
+                  </button>
+                ))}
+              </div>
+
+              {/* Inventory summary */}
+              <div style={{ fontWeight: 800, fontSize: 15, marginBottom: 12, color: C.mutedLight }}>INVENTORY SUMMARY</div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {[
+                  { n: products.length, lbl: 'Products', color: C.text },
+                  { n: outStock.length, lbl: 'Out of Stock', color: C.danger },
+                  { n: lowStock.length, lbl: 'Low Stock', color: C.warning },
+                ].map(({ n, lbl, color }) => (
+                  <div key={lbl} style={{ ...S.statCard }}>
+                    <div style={{ fontSize: 28, fontWeight: 900, color }}>{n}</div>
+                    <div style={{ color: C.muted, fontSize: 12, marginTop: 2 }}>{lbl}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ─ PRODUCTS ─ */}
+        {tab === 'products' && (
+          <ProductsTab
+            products={products} delProduct={delProduct}
+            openAdd={() => setModal('addProd')}
+            openEdit={(p) => { setSelected(p); setModal('editProd'); }}
+          />
+        )}
+
+        {/* ─ POS ─ */}
+        {tab === 'pos' && (
+          <POSTab
+            products={products} cart={cart} addToCart={addToCart}
+            removeFromCart={removeFromCart} setQty={setQty}
+            cartTotal={cartTotal} completeSa// ============================================================
+// POS TAB
+// ============================================================
+const POSTab = ({
+  products, cart, addToCart, removeFromCart, setQty,
+  cartTotal, completeSale
+}) => {
+  const [search, setSearch] = useState('');
+
+  const filtered = products.filter(p =>
+    p.name.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <>
+      <Bar title="Point of Sale" />
+
+      <div style={{ padding: 16 }}>
+        <Field
+          placeholder="Search products..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
+
+        {/* Products */}
+        {filtered.map(p => (
+          <div key={p.id} style={S.card}>
+            <div style={S.row}>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 800 }}>{p.name}</div>
+                <div style={{ color: C.muted }}>
+                  {fmt(p.sellingPrice)} · {p.qty} in stock
+                </div>
+              </div>
+              <Btn onClick={() => addToCart(p)}>Add</Btn>
+            </div>
+          </div>
+        ))}
+
+        {/* Cart */}
+        <div style={{ marginTop: 20 }}>
+          <div style={{ fontWeight: 800 }}>Cart</div>
+
+          {cart.length === 0 && <Empty icon="🛒" msg="No items in cart" />}
+
+          {cart.map(item => (
+            <div key={item.pid} style={S.card}>
+              <div style={S.row}>
+                <div style={{ flex: 1 }}>
+                  <div>{item.name}</div>
+                  <div>{fmt(item.price)}</div>
+                </div>
+
+                <input
+                  type="number"
+                  value={item.qty}
+                  onChange={e => setQty(item.pid, Number(e.target.value))}
+                  style={{ width: 60 }}
+                />
+
+                <Btn variant="danger" onClick={() => removeFromCart(item.pid)}>X</Btn>
+              </div>
+            </div>
+          ))}
+
+          {cart.length > 0 && (
+            <>
+              <div style={{ fontWeight: 800, marginTop: 10 }}>
+                Total: {fmt(cartTotal)}
+              </div>
+              <Btn full onClick={completeSale} style={{ marginTop: 10 }}>
+                Complete Sale
+              </Btn>
+            </>
+          )}
+        </div>
+      </div>
+    </>
+  );
+};
